@@ -25,7 +25,6 @@ sgd trainingData epochs minibatchSize eta net = do
     let newNet = foldl (\net batch -> updateMiniBatch net batch eta) net $ chunksOf minibatchSize shuffled
     sgd trainingData (epochs-1) minibatchSize eta newNet
 
-
 updateMiniBatch :: Network -> [([Double], Int)] -> Double -> Network
 updateMiniBatch net@(Network xs sizes) miniBatch eta =
     Network (zipWith (\x y -> mapTuple ((-) (eta/(fromIntegral $ length miniBatch)) . (* y)) x) xs
