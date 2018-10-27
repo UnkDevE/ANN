@@ -1,7 +1,7 @@
 module Data
 (
-    getTrainingData
-    getLabelsFromFile
+    getTrainingData,
+    getLabelsFromFile,
     getImagesFromFile
 )
 where 
@@ -11,12 +11,14 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Binary.Get 
 import Data.Word (Word8)
 
-getTrainingData :: String -> String -> [([Double], Int)]
-getTrainingData imagef labelf = 
-    zip (map fromIntegral $ getImagesFromFile imagef) 
-        $ (map fromIntegral $ getLabelsFromFIle labelf)
+getTrainingData :: String -> String -> IO [([Double], Int)]
+getTrainingData imagef labelf = do
+    img <- getImagesFromFile imagef
+    lab <- getLabelsFromFile labelf
+    return $ zip (map (map ((/255) . fromIntegral)) img)
+        $ map fromIntegral lab
 
-getLabelsFromFile :: String -> [Word8]
+getLabelsFromFile :: String -> IO [Word8]
 getLabelsFromFile file = do
     cont <- BL.readFile file
     return $ runGet readLabels cont
@@ -31,7 +33,7 @@ labels :: Int -> [Get Word8]
 labels n = do
     getWord8:labels (n-1)
 
-getImagesFromFile :: String -> [[Word8]]
+getImagesFromFile :: String -> IO [[Word8]]
 getImagesFromFile file = do
     cont <- BL.readFile file
     return $ runGet readImages cont

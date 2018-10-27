@@ -1,12 +1,13 @@
 module Main where
 
-import Image
+import Data
 import Network
 
 main :: IO ()
 main = do
-    trainingData <- getImagesFromFile "trainingdata/train-images-idx3-ubyte"
-    -- let network = sgd (tail trainingData) 30 10 3 $ emptyNetwork [712, 15, 10]
-    -- let out = predict network $ head trainingData
-    -- putStrLn $ maybe "no result" (show) out
+    trainingData <- getTrainingData "trainingdata/train-images-idx3-ubyte" "trainingdata/train-labels-idx3-ubyte"
+    net <- emptyNetwork [712, 15, 10]
+    trainedNetwork <- sgd (tail trainingData) 30 10 3 net
+    let out = predict trainedNetwork $ fst $ head trainingData
+    putStrLn $ "actual: " ++ show (snd $ head trainingData) ++ "predicted: " ++ show out
 
