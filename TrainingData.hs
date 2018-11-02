@@ -1,8 +1,8 @@
 module TrainingData
 (
     loadBatch,
-    loadImage
-    getLabelsFromFile,
+    loadImage,
+    getLabelsFromFile
 )
 where 
 
@@ -29,8 +29,8 @@ loadBatch file ns = sequence $ map (loadImage file) ns
 loadImage :: String -> Int -> IO [Double]
 loadImage file n  = readImage file n >>= prepareImage
 
-prepareImage :: [Word8] -> [Double]
-prepareImage image = map (\n -> fromIntegral n / 255) image 
+prepareImage :: [Word8] -> IO [Double]
+prepareImage image = return $ map (\n -> fromIntegral n / 255) image 
 
 readImage :: String -> Int -> IO [Word8]
 readImage file n = do

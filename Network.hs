@@ -3,19 +3,20 @@ module Network
     sgd,
     emptyNetwork,
     predict,
-    predictHighest
+    predictHighest,
     Network (..)
 )
 where
 
 import TrainingData
+import Control.Monad (foldM)
 import System.Random
 import System.Random.Shuffle (shuffle)
 import Data.List (transpose, foldl')
 import Data.List.Split (chunksOf)
 
 predictHighest :: Network -> [Double] -> Int
-predictHighest net a = snd $ foldl' (\p@(acc, _) n@(a, n) if acc < a then n else p) zip (predict net a) [0..]
+predictHighest net a = snd $ foldl (\p@(acc, _) n@(a, _) -> if acc < a then n else p) (0, 0) $ zip (predict net a) [0..]
 
 predict :: Network -> [Double] -> [Double]
 predict (Network xs _) a = foldl' (\acc (w, b) -> map (\act -> sigmoid $ (act*w) + b) acc) a xs
@@ -26,10 +27,12 @@ sgd :: String -> [Int] -> Int -> Int -> Double -> Network -> IO Network
 sgd imagesFile labels 0 minibatchSize eta net = return net
 sgd imagesFile labels epochs minibatchSize eta net = do
     gen <- getStdGen
-    let shuffled = shuffle (zip labels [1..]) $ randomRs (0, 2) gen
-    batch = zip (loadBatch imagesFile (snd shuffled)) $ fst shuffled
-    let newNet = foldl (\net batch -> updateMiniBatch net batch eta) net $ chunksOf minibatchSize shuffled
-    sgd trainingData (epochs-1) minibatchSize eta newNet
+    let shuffled = shuffle (zip labels [0..]) $ randomRs (0, 2) gen
+    newNet <- foldM (\net batch -> do 
+                            let (ls, ns) = unzip batch
+                            images <- loadBatch imagesFile ns 
+                            return $ updateMiniBatch net (zip images ls) eta) net $ chunksOf minibatchSize shuffled
+    sgd imagesFile labels (epochs-1) minibatchSize eta newNet
 
 updateMiniBatch :: Network -> [([Double], Int)] -> Double -> Network
 updateMiniBatch net@(Network xs sizes) miniBatch eta =
