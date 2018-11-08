@@ -1,7 +1,12 @@
 module Network 
 (
     sgd,
+    networkError,
+    updateMiniBatch,
+    outputError,
     emptyNetwork,
+    transpose,
+    unflatten,
     predict,
     predictHighest,
     Network (..)
@@ -10,8 +15,9 @@ where
 
 import TrainingData
 import Control.Monad (foldM)
-import System.Random
-import System.Random.Shuffle (shuffle)
+import System.Random (getStdGen, randomRs)
+import System.Random.Shuffle (shuffle')
+import qualified Data.ByteString.Lazy as BL
 import Data.List (transpose, foldl')
 import Data.List.Split (chunksOf)
 
@@ -19,52 +25,77 @@ predictHighest :: Network -> [Double] -> Int
 predictHighest net a = snd $ foldl (\p@(acc, _) n@(a, _) -> if acc < a then n else p) (0, 0) $ zip (predict net a) [0..]
 
 predict :: Network -> [Double] -> [Double]
-predict (Network xs _) a = foldl' (\acc (w, b) -> map (\act -> sigmoid $ (act*w) + b) acc) a xs
+predict (Network xs) a =  foldl' (\i layer -> 
+    foldl' (\acc (w, b) -> map (\act -> sigmoid $ (dot w a) + b) acc) i layer) [] xs
+
+dot => (Num a) -> [a] -> [a] -> a
+dot xs ys = sum $ zipWith (*) xs ys 
 
 sigmoid z = 1 / (1 + exp (-z))
 
-sgd :: String -> [Int] -> Int -> Int -> Double -> Network -> IO Network
-sgd imagesFile labels 0 minibatchSize eta net = return net
-sgd imagesFile labels epochs minibatchSize eta net = do
+sgd :: BL.ByteString -> [Int] -> Int -> Int -> Double -> Network -> IO Network
+sgd imagesCont labels 0 minibatchSize eta net = return net
+sgd imagesCont labels epochs minibatchSize eta net = do
     gen <- getStdGen
-    let shuffled = shuffle (zip labels [0..]) $ randomRs (0, 2) gen
+    let shuffled = shuffle' (zip labels [0..]) (length labels) gen
     newNet <- foldM (\net batch -> do 
                             let (ls, ns) = unzip batch
-                            images <- loadBatch imagesFile ns 
+                            images <- loadBatch imagesCont ns 
                             return $ updateMiniBatch net (zip images ls) eta) net $ chunksOf minibatchSize shuffled
-    sgd imagesFile labels (epochs-1) minibatchSize eta newNet
+    sgd imagesCont labels (epochs-1) minibatchSize eta newNet
 
 updateMiniBatch :: Network -> [([Double], Int)] -> Double -> Network
-updateMiniBatch net@(Network xs sizes) miniBatch eta =
-    Network (zipWith (\x y -> mapTuple ((-) (eta/(fromIntegral $ length miniBatch)) . (* y)) x) xs
-        $ foldr (\acc n -> zipWith (+) acc n) (repeat 0) 
-            $ map (\batch -> zipWith (*) (predict net (fst batch)) $ networkError net batch) miniBatch) sizes
+updateMiniBatch net@(Network xs) miniBatch eta =
+            Network $ zipWith (zip) (zipWith (subMatrix) (map (fst $ unzip) xs)
+                    (map (flip multiplyMatrix) (eta / fromIntegral $ length miniBatch) 
+                        (foldr (\acc (nxt, act) -> sumMatrix acc $ multiplyMatrices act nxt) [] 
+                            zip (map (networkError net) miniBatch) (map (activations net) (fst $ unzip $ miniBatch)))))
+                $ zipWith (zipWith (-) $ zipWith (*) (repeat (eta / fromIntegral $ length miniBatch))) 
+                    $ foldr (\acc nxt -> zipWith (+) acc nxt) (repeat 0) $ map (networkError net) miniBatch 
+
+
+subMatrix :: (Num a) => [[a]] -> [[a]] -> [[a]]
+subMatrix xxs yys = map (map (\(x,y) -> zipWith (-) x y) $ zip xxs yys
+
+sumMatrix :: (Num a) => [[a]] -> [[a]] -> [[a]]
+sumMatrix xxs yys = map (map (\(x,y) -> zipWith (+) x y) $ zip xxs yys
+
+multiplyMatrix :: (Num a) => [[a]] -> a -> [[a]]
+multiplyMatrix xxs y = map (map (* y)) xxs
+
+multiplyMatrices :: (Num a) => [[a]] -> [[a]] -> [[a]]
+multiplyMatrices xxs yys = 
+    map (\xs -> map (dot xs) $ transpose yys) xxs
 
 mapTuple :: (a -> b) -> (a, a) -> (b, b)
 mapTuple f (x, y) = (f x, f y)
 
-networkError :: Network -> ([Double], Int) -> [Double]
-networkError net@(Network xs sizes) ex@(x, y) = 
-    foldl' (\errors ws -> zipWith (*) (map (sigmoidPrime) x) $ zipWith (*) errors ws)
-        (outputError net ex) $ transpose $ unflatten (fst $ unzip xs) sizes
+networkError :: Network -> ([Double], Int) -> [[Double]]
+networkError net@(Network xs) ex@(x, y) = scanl (\error (act, tws) ->
+            zipWith (*) (matrixVectorProduct tws error) $ map (sigmoidPrime) act)
+        (outputError net ex) $ zip (activations net x) $ map (transpose $ (fst $ unzip ys)) xs
 
-sigmoidPrime z = sigmoid z * (1-sigmoid z)
+matrixVectorProduct (Num a) => [[a]] -> [a] -> [a]
+matrixVectorProduct xxs xs = map (dot xs) xxs
 
-unflatten :: [Double] -> [Int] -> [[Double]]
-unflatten xs (size:sizes) = take size xs:unflatten (drop size xs) sizes
-unflatten xs [] = [] 
+activations :: Network -> [Double] -> [[Double]]
+activations (Network xs) a =  scanr 
+    (\i layer -> foldl' (\acc (w, b) -> map (\act -> sigmoid $ (dot w a) + b) acc) i layer) [] xs
+
+sigmoidPrime z = z * (1 - z)
 
 outputError :: Network -> ([Double], Int) -> [Double]
 outputError net (x, y) = 
-    zipWith (*) (map (sigmoidPrime) x) $ zipWith (-) (predict net x) $ map (fromIntegral) $ actual y 
-
+    zipWith (*) (zipWith (-) (predict net x) y) $ map (sigmoidPrime) $ predict net x
+    
 actual :: (Num a) => Int -> [a] 
 actual n = [if x == 0 then 1 else 0 | x <- [n, (n-1)..]]
 
-emptyNetwork :: [Int] -> IO Network
-emptyNetwork sizes = do
+makeEmptyNetwork :: [Int] -> IO Network
+makeEmptyNetwork sizes = do
     gen <- getStdGen
-    let x = sum sizes
-    return $ Network (zip (take x $ randomRs (0::Double, 1::Double) gen) (take x $ repeat 0)) sizes
-
-data Network = Network [(Double, Double)] [Int]
+    let rands = randomRs (0::Double, 1::Double) gen
+    return $ Network 
+        map (\(i, t) -> zip (take t $ repeat $ take i rands) (take t rands)) $ zip (init sizes) (tail sizes)
+        
+data Network = Network [[([Double], Double)]] 

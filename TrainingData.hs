@@ -23,18 +23,17 @@ readLabels = do
     n <- getWord32be
     replicateM (fromIntegral n) getWord8
 
-loadBatch :: String -> [Int] -> IO [[Double]]
-loadBatch file ns = sequence $ map (loadImage file) ns 
+loadBatch :: BL.ByteString -> [Int] -> IO [[Double]]
+loadBatch cont ns = sequence $ map (loadImage cont) ns 
 
-loadImage :: String -> Int -> IO [Double]
-loadImage file n  = readImage file n >>= prepareImage
+loadImage :: BL.ByteString -> Int -> IO [Double]
+loadImage cont n  = readImage cont n >>= prepareImage
 
 prepareImage :: [Word8] -> IO [Double]
 prepareImage image = return $ map (\n -> fromIntegral n / 255) image 
 
-readImage :: String -> Int -> IO [Word8]
-readImage file n = do
-    cont <- BL.readFile file  
+readImage :: BL.ByteString -> Int -> IO [Word8]
+readImage cont n = do
     let pixels = runGet readImagesHeader cont 
     let bs = BL.drop (fromIntegral $ pixels*n) cont
     return $ runGet (replicateM pixels getWord8) bs
