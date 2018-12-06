@@ -7,6 +7,7 @@ module Network
     predict,
     emptyNetwork,
     predictHighest,
+    activations,
     Network (..)
 )
 where
@@ -19,12 +20,18 @@ import qualified Data.ByteString.Lazy as BL
 import Data.List (transpose, foldl')
 import Data.List.Split (chunksOf)
 
+import Debug.Trace
+
 predictHighest :: Network -> [Double] -> Int
 predictHighest net a = snd $ foldl (\p@(acc, _) n@(a, _) -> if acc < a then n else p) (0, 0) $ zip (predict net a) [0..]
 
 predict :: Network -> [Double] -> [Double]
-predict net a =  foldl' (\i layer -> 
-    foldl' (\acc (w, b) -> map (\act -> sigmoid $ (dot w a) + b) acc) i layer) [] $ zipNetwork net
+predict (Network weights baises) a = 
+    foldl' (\act (ws, bs) -> zipWith ((+) . sigmoid) bs $ matrixVectorProduct ws act) a
+        $ zip weights baises
+
+matrixVectorProduct :: (Num a) => [[a]] -> [a] -> [a]
+matrixVectorProduct xxs xs = map (dot xs) xxs
 
 dot :: (Num a) => [a] -> [a] -> a
 dot xs ys = sum $ zipWith (*) xs ys 
@@ -70,24 +77,17 @@ multiplyMatrices xxs yys =
 mapTuple :: (a -> b) -> (a, a) -> (b, b)
 mapTuple f (x, y) = (f x, f y)
 
-networkError :: Network -> ([Double], Int) -> [[Double]]
+networkError :: Network -> ([Double], Int) -> [[[Double]]]
 networkError net@(Network ws bs) ex@(x, y) = scanl (\error (act, tws) ->
-            matrixVectorProduct (map (map (sigmoidPrime)) act) (matrixVectorProduct tws error))
-        (outputError net ex) $ zip (repeat $ activations net x) $ map (transpose) ws
-
-matrixVectorProduct :: (Num a) => [[a]] -> [a] -> [a]
-matrixVectorProduct xxs xs = map (dot xs) xxs
-
-activations :: Network -> [Double] -> [[Double]]
-activations net a =  scanl 
-    (\i layer -> 
-        (foldl' (\acc (w, b) -> map (\act -> sigmoid $ (dot w a) + b) acc) i layer))
-            [] $ zipNetwork net 
-
-zipNetwork :: Network -> [[([Double], Double)]]
-zipNetwork (Network ws bs) = map (\(w, b) -> zip w b) $ zip ws bs 
+            matrixVectorProduct act $ matrixVectorProduct tws error)
+        (outputError net ex) $ zip (map (map (sigmoidPrime)) $ activations net x) $ map (transpose) ws
 
 sigmoidPrime z = z * (1 - z)
+
+activations :: Network -> [Double] -> [[Double]]
+activations (Network weights baises) a = 
+    scanl (\act (ws, bs) -> zipWith ((+) . sigmoid) bs $ matrixVectorProduct ws act) a
+        $ zip weights baises
 
 outputError :: Network -> ([Double], Int) -> [Double]
 outputError net (x, y) =
