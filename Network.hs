@@ -28,13 +28,15 @@ predictHighest net a = snd $ foldl' (\p@(acc, _) n@(a, _) -> if acc < a then n e
 predict :: Network -> [Double] -> [Double]
 predict (Network neurons) a = foldl' (foldl' (\act (Neuron ws b) -> map (sigmoid . (+ b)) (zipWith (*) ws act))) a neurons 
 
-matrixVectorProduct :: (Num a) => [[a]] -> [a] -> [a]
+matrixVectorProduct :: [[Double]] -> [Double] -> [Double]
 matrixVectorProduct xxs xs = map (dot xs) xxs
 
 dot :: (Num a) => [a] -> [a] -> a
 dot xs ys = sum $ zipWith (*) xs ys 
 
 sigmoid z = 1 / (1 + exp (-z))
+
+data TrainData = TrainData [Double] Int 
 
 sgd :: BL.ByteString -> [Int] -> Int -> Int -> Double -> Network -> IO Network
 sgd imagesCont labels 0 minibatchSize eta net = return net
@@ -44,70 +46,83 @@ sgd imagesCont labels epochs minibatchSize eta net = do
     newNet <- foldM (\net batch -> do 
                             let (ls, ns) = unzip batch
                             images <- loadBatch imagesCont ns 
-                            return $ updateMiniBatch net (map (map (Neuron) images) ls) eta) net $ chunksOf minibatchSize shuffled
+                            return $ updateMiniBatch net 
+                                (zipWith ($) (map (TrainData) images) ls) eta) 
+                net$ chunksOf minibatchSize shuffled
     sgd imagesCont labels (epochs-1) minibatchSize eta newNet
 
-updateMiniBatch :: Network -> [Neuron] -> Double -> Network
+updateMiniBatch :: Network -> [TrainData] -> Double -> Network
 updateMiniBatch net@(Network neurons) miniBatch eta =
-    flatToNeuron 
-        (zip (map (map (subMatrix)) (toWeights net))
-            $ foldr1 (\mat (act, err) -> sumMatrix mat $ multiplyMatrices err act) $ map 
-                zip (((activations net) . transpose . ((flip shiftL) (repeat 1)) . (flip multiplyMatrix) nm) miniBatch)
-                    error)
-             $ (map (map (subMatrix)) (toBaises net))
-                foldr1 (sumMatrix) map ((flip multiplyMatrix) nm) error
+    flatToNeuron $ zip
+        (zipWith ($) (map (subMatrix) $ toWeights net)
+            $ scanr (\(act, err) mat -> sumMatrix mat $ multiplyMatrices act err) 
+                (repeat (repeat (0::Double)))
+                $ zip (((map (activations net)) . 
+                        transpose . 
+                        ((flip shiftL) (repeat (1::Double))) . 
+                        ((flip multiplyMatrix) nm)) weights)
+                    (repeat error))
+            $ subMatrix (toBaises net)
+                $ ((flip multiplyMatrix) nm) error 
     where nm = (eta / (fromIntegral $ length miniBatch))
-          error = foldr1 (sumMatrix) $ map (networkError net) miniBatch 
+          error = (foldr1 (sumMatrix)) $ map (networkError net) miniBatch 
+          weights = (\xs -> map (\(TrainData ws _) -> ws) xs) miniBatch
           
 toBaises :: Network -> [[Double]] 
 toBaises (Network neurons) = map (map (\(Neuron _ bs) -> bs)) neurons  
 
 shiftL :: [a] -> a -> [a]
-shiftL a z = (tail a) ++ z
+shiftL a z = (tail a) ++ [z]
 
 flatToNeuron :: [([[Double]], [Double])] -> Network
-flatToNeuron net = map (\(ws, bs) -> map (\(w,b) -> Neuron w b) $ zip ws bs) 
+flatToNeuron net = Network $ map (\(ws, bs) -> map (\(w,b) -> Neuron w b) $ zip ws bs) net 
 
-subMatrix :: (Num a) => [[a]] -> [[a]] -> [[a]]
+subMatrix :: [[Double]] -> [[Double]] -> [[Double]]
 subMatrix xxs yys = map (\(x,y) -> zipWith (-) x y) $ zip xxs yys
 
-sumMatrix :: (Num a) => [[a]] -> [[a]] -> [[a]]
+sumMatrix :: [[Double]] -> [[Double]] -> [[Double]]
 sumMatrix xxs yys = map (\(x,y) -> zipWith (+) x y) $ zip xxs yys
 
-multiplyMatrix :: (Num a) => [[a]] -> a -> [[a]]
+multiplyMatrix :: [[Double]] -> Double -> [[Double]]
 multiplyMatrix xxs y = map (map (* y)) xxs
 
-multiplyMatrices :: (Num a) => [[a]] -> [[a]] -> [[a]]
+multiplyMatrices :: [[Double]] -> [[Double]] -> [[Double]]
 multiplyMatrices xxs yys = 
     map (\xs -> map (dot xs) $ transpose yys) xxs
 
 mapTuple :: (a -> b) -> (a, a) -> (b, b)
 mapTuple f (x, y) = (f x, f y)
 
-networkError :: Network -> Neuron -> [[Double]]
-networkError net@(Network neurons) neuron@(Neuron w b) = 
-    scanr (\err (ws, act) -> zipWith (*) act $ matrixVectorProduct (transpose ws) err)
-        (outputError net neuron) $ zip (toWeights neurons) $ activations net neuron 
-        
+networkError :: Network -> TrainData -> [[Double]]
+networkError net@(Network neurons) neuron@(TrainData w b) = 
+    foldr (\(ws, act) err -> havardProduct act $ multiplyMatrices (transpose ws) err) 
+        (outputError net neuron) $ zip (toWeights net) $ (repeat $ activations net w)
+
+havardProduct :: [[Double]] -> [[Double]] -> [[Double]]
+havardProduct xxs yys =
+    map (\(xs, ys) -> zipWith (*) xs ys) $ zip xxs yys
+
 toWeights :: Network -> [[[Double]]]
 toWeights (Network neurons) = map (map (\(Neuron ws _) -> ws)) neurons  
 
+sigmoidPrime :: Double -> Double
 sigmoidPrime z = z * (1 - z)
-
-activations :: Network -> Neuron-> [[Double]]
-activations (Network neurons) (Neuron a _) = 
+    
+outputError :: Network -> TrainData -> [[Double]]
+outputError net (TrainData w a) =
+    map (map (sigmoidPrime) . (zipWith (*) $ zipWith (-) (predict net w) (actual a))) $ activations net w
+    
+activations :: Network -> [Double] -> [[Double]]
+activations (Network neurons) a = 
     scanl (foldl' (\act (Neuron ws b) -> map (sigmoid . (+ b)) (zipWith (*) ws act))) a neurons
-    
-outputError :: Network -> Neuron -> [Double]
-outputError net (Neuron w b) =
-    zipWith (*) (zipWith (-) (predict net w) $ actual b) $ map (sigmoidPrime) $ predict net w
-    
-actual :: (Num a) => Int -> [a] 
+
+actual :: Int -> [Double] 
 actual n = [if x == 0 then 1 else 0 | x <- [n, (n-1)..]]
 
 emptyNetwork :: [Int] -> IO Network
 emptyNetwork sizes = 
-    map (map (emptyNeuron) sizes) sizes
+    fmap (Network) $ sequence $ map (sequence) $
+        map (\(e, t) -> replicate t e) $ zip (map (emptyNeuron) (init sizes)) $ tail sizes
 
 emptyNeuron :: Int -> IO Neuron 
 emptyNeuron size = do
