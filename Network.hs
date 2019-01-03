@@ -20,8 +20,6 @@ import qualified Data.ByteString.Lazy as BL
 import Data.List (transpose, foldl')
 import Data.List.Split (chunksOf)
 
-import Debug.Trace
-
 predictHighest :: Network -> [Double] -> Int
 predictHighest net a = snd $ foldl' (\p@(acc, _) n@(a, _) -> if acc < a then n else p) (0, 0) $ zip (predict net a) [0..]
 
@@ -48,25 +46,27 @@ sgd imagesCont labels epochs minibatchSize eta net = do
                             images <- loadBatch imagesCont ns 
                             return $ updateMiniBatch net 
                                 (zipWith ($) (map (TrainData) images) ls) eta) 
-                net$ chunksOf minibatchSize shuffled
+                net $ chunksOf minibatchSize shuffled
     sgd imagesCont labels (epochs-1) minibatchSize eta newNet
 
 updateMiniBatch :: Network -> [TrainData] -> Double -> Network
 updateMiniBatch net@(Network neurons) miniBatch eta =
     flatToNeuron $ zip
-        (zipWith ($) (map (subMatrix) $ toWeights net)
-            $ scanr (\(act, err) mat -> sumMatrix mat $ multiplyMatrices act err) 
+        (zipWith ($!) (map (subMatrix) $ toWeights net)
+            (repeatMatrix $ foldr (\act mat -> sumMatrix mat $ multiplyMatrices act error) 
                 (repeat (repeat (0::Double)))
-                $ zip (((map (activations net)) . 
+                $ map (((flip multiplyMatrix) nm) . 
+                        ((flip shiftL) $ repeat (1::Double)) . 
                         transpose . 
-                        ((flip shiftL) (repeat (1::Double))) . 
-                        ((flip multiplyMatrix) nm)) weights)
-                    (repeat error))
+                        (activations net)) weights))
             $ subMatrix (toBaises net)
                 $ ((flip multiplyMatrix) nm) error 
     where nm = (eta / (fromIntegral $ length miniBatch))
           error = (foldr1 (sumMatrix)) $ map (networkError net) miniBatch 
           weights = (\xs -> map (\(TrainData ws _) -> ws) xs) miniBatch
+
+repeatMatrix :: [[Double]] -> [[[Double]]]
+repeatMatrix = map (map (repeat))
           
 toBaises :: Network -> [[Double]] 
 toBaises (Network neurons) = map (map (\(Neuron _ bs) -> bs)) neurons  
@@ -114,7 +114,7 @@ outputError net (TrainData w a) =
     
 activations :: Network -> [Double] -> [[Double]]
 activations (Network neurons) a = 
-    scanl (foldl' (\act (Neuron ws b) -> map (sigmoid . (+ b)) (zipWith (*) ws act))) a neurons
+    tail $ scanl (foldl' (\act (Neuron ws b) -> map (sigmoid . (+ b)) (zipWith (*) ws act))) a neurons
 
 actual :: Int -> [Double] 
 actual n = [if x == 0 then 1 else 0 | x <- [n, (n-1)..]]
